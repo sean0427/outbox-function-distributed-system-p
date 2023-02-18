@@ -2,7 +2,10 @@ module github.com/sean0427/outbox-function-distributed-system-p
 
 go 1.19
 
-require github.com/segmentio/kafka-go v0.4.38
+require (
+	github.com/google/uuid v1.3.0
+	github.com/segmentio/kafka-go v0.4.38
+)
 
 require (
 	github.com/klauspost/compress v1.15.9 // indirect

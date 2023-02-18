@@ -3,8 +3,10 @@ package kafka
 import (
 	"context"
 	"log"
+	"net"
 	"time"
 
+	"github.com/google/uuid"
 	kafka "github.com/segmentio/kafka-go"
 )
 
@@ -15,35 +17,45 @@ type kafkaConn interface {
 
 var _ kafkaConn = (*kafka.Conn)(nil)
 
-type dataSteam struct {
+type DataSteam struct {
 	client  kafkaConn
 	msgChan chan *kafka.Message
 	errChan chan error
 }
 
 const defaultDeadLine time.Duration = 30 * time.Second
-const max_processing_time time.Duration = 10 * time.Minute
+const maxProcessingTime time.Duration = 10 * time.Minute
 
-func New(ctx context.Context, topic string) (*dataSteam, error) {
-	conn, err := kafka.DialLeader(ctx, "tcp", "localhost:9092", topic, 0)
+// TODO
+var clientId = uuid.New().String()
+
+func New(ctx context.Context, topic, path string) (*DataSteam, error) {
+	tcpConn, err := net.Dial("tcp", path)
+	if err != nil {
+		return nil, err
+	}
+	kafConfig := kafka.ConnConfig{
+		ClientID:        clientId,
+		Topic:           topic,
+		Partition:       0,
+		TransactionalID: uuid.NewString(),
+	}
+
+	conn := kafka.NewConnWith(tcpConn, kafConfig)
 	conn.SetDeadline(time.Now().Add(defaultDeadLine))
 	if err != nil {
 		log.Fatal("failed to dial leader:", err)
 	}
 
-	return &dataSteam{
+	return &DataSteam{
 		client:  conn,
 		msgChan: make(chan *kafka.Message),
 		errChan: make(chan error),
 	}, nil
 }
 
-func (ds *dataSteam) Wait(can context.CancelFunc) {
+func (ds *DataSteam) Wait() {
 	maxTime := make(chan struct{}, 1)
-	go func() {
-		maxTime <- struct{}{}
-		can()
-	}()
 
 	go func() {
 		for {
@@ -71,7 +83,6 @@ func (ds *dataSteam) Wait(can context.CancelFunc) {
 			} else if done {
 				// consume to end
 				return
-
 			}
 		}
 	}()
@@ -79,6 +90,6 @@ func (ds *dataSteam) Wait(can context.CancelFunc) {
 	<-maxTime
 }
 
-func (ds *dataSteam) Send(msg []byte) {
+func (ds *DataSteam) Send(msg []byte) {
 	ds.msgChan <- &kafka.Message{Value: msg}
 }

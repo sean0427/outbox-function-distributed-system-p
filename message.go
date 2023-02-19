@@ -1,33 +1,29 @@
 package message
 
 import (
-	"log"
+	"context"
+	"io"
 )
 
 type messageHandler interface {
-	Send(msg []byte)
+	GetOrCreate(topic string) chan []byte
 }
 
 type service struct {
-	handlers map[string]messageHandler
+	handlers messageHandler
 }
 
-func New(handler map[string]messageHandler) *service {
+func NewWithSingle(handler messageHandler) *service {
 	return &service{
-		handlers: handler,
+		handler,
 	}
 }
 
-func NewWithSingle(key string, handler messageHandler) *service {
-	return &service{
-		handlers: map[string]messageHandler{
-			key: handler,
-		}}
-}
-
-func (s *service) Send(msg []byte) {
-	for key, handler := range s.handlers {
-		log.Printf("sending message to handler: %s", key)
-		handler.Send(msg)
+func (s *service) SendTo(ctx context.Context, body io.Reader, topic string, id string) error {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return err
 	}
+	s.handlers.GetOrCreate(topic) <- data
+	return nil
 }

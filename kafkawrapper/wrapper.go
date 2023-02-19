@@ -29,16 +29,17 @@ const maxProcessingTime time.Duration = 10 * time.Minute
 // TODO
 var clientId = uuid.New().String()
 
-func New(ctx context.Context, topic, path string) (*DataSteam, error) {
+func New(ctx context.Context, topic,
+	path string,
+	msg chan *kafka.Message) (*DataSteam, error) {
 	tcpConn, err := net.Dial("tcp", path)
 	if err != nil {
 		return nil, err
 	}
 	kafConfig := kafka.ConnConfig{
-		ClientID:        clientId,
-		Topic:           topic,
-		Partition:       0,
-		TransactionalID: uuid.NewString(),
+		ClientID:  clientId,
+		Topic:     topic,
+		Partition: 0,
 	}
 
 	conn := kafka.NewConnWith(tcpConn, kafConfig)
@@ -54,8 +55,8 @@ func New(ctx context.Context, topic, path string) (*DataSteam, error) {
 	}, nil
 }
 
-func (ds *DataSteam) Wait() {
-	maxTime := make(chan struct{}, 1)
+func (ds *DataSteam) Wait(waitTime time.Duration, errChan chan error) {
+	maxTime := make(chan time.Time, 1)
 
 	go func() {
 		for {
@@ -64,30 +65,20 @@ func (ds *DataSteam) Wait() {
 				_, err := ds.client.WriteMessages(*b)
 				if err != nil {
 					// error not be block message
-					ds.errChan <- err
+					errChan <- err
 				}
 			case <-time.After(1 * time.Millisecond):
-				//do nothing
-			case <-maxTime:
+				continue
+			case v := <-maxTime:
+				log.Printf("Conn stop on %s", v.Format(time.RFC1123))
 				ds.client.Close()
-				close(ds.errChan)
 				return
 			}
 		}
 	}()
 
-	go func() {
-		for {
-			if err, done := <-ds.errChan; !done {
-				log.Println(err.Error())
-			} else if done {
-				// consume to end
-				return
-			}
-		}
-	}()
-
-	<-maxTime
+	v := <-time.After(waitTime)
+	maxTime <- v
 }
 
 func (ds *DataSteam) Send(msg []byte) {

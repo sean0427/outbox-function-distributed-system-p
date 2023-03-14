@@ -53,8 +53,8 @@ func (ka *kafkaController) GetOrCreate(topic string) chan []byte {
 }
 
 func (ka *kafkaController) create(topic string) chan []byte {
-	conn := make(chan []byte, 1)
-	connKafka := make(chan *kafka.Message, 1)
+	conn := make(chan []byte)
+	connKafka := make(chan *kafka.Message)
 
 	go func() {
 		for {
@@ -68,13 +68,14 @@ func (ka *kafkaController) create(topic string) chan []byte {
 		}
 	}()
 
-	go func() {
+	defer func() {
 		defer close(connKafka)
 		defer close(conn)
-		defer delete(ka.conns, topic)
 
-		c, cancel := context.WithTimeout(context.Background(), defaultClientTimeout)
-		client, err := create(c, topic, ka.path, connKafka)
+		ctx, cancel := context.WithTimeout(context.Background(), defaultClientTimeout)
+		defer cancel()
+
+		client, err := create(ctx, topic, ka.path, connKafka)
 		if err != nil {
 			log.Print(err.Error())
 			cancel()
@@ -82,10 +83,11 @@ func (ka *kafkaController) create(topic string) chan []byte {
 			return
 		}
 
-		client.Wait(defaultClientTimeout, ka.errChan)
-		cancel()
+		client.Wait(ctx, ka.errChan)
+		delete(ka.conns, topic)
 	}()
 
+	ka.conns[topic] = conn
 	return conn
 }
 

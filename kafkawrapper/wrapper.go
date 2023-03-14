@@ -3,10 +3,8 @@ package kafka
 import (
 	"context"
 	"log"
-	"net"
 	"time"
 
-	"github.com/google/uuid"
 	kafka "github.com/segmentio/kafka-go"
 )
 
@@ -24,25 +22,23 @@ type DataSteam struct {
 }
 
 const defaultDeadLine time.Duration = 30 * time.Second
-const maxProcessingTime time.Duration = 10 * time.Minute
+
+// const maxProcessingTime time.Duration = 10 * time.Minute
 
 // TODO
-var clientId = uuid.New().String()
+// var clientId = "outbox-service"
 
 func New(ctx context.Context, topic,
 	path string,
 	msg chan *kafka.Message) (*DataSteam, error) {
-	tcpConn, err := net.Dial("tcp", path)
+
+	log.Printf("kafka connect to %s %s", path, topic)
+
+	conn, err := kafka.DialLeader(ctx, "tcp", path, topic, 0)
 	if err != nil {
-		return nil, err
-	}
-	kafConfig := kafka.ConnConfig{
-		ClientID:  clientId,
-		Topic:     topic,
-		Partition: 0,
+		log.Fatal("failed to dial leader:", err)
 	}
 
-	conn := kafka.NewConnWith(tcpConn, kafConfig)
 	conn.SetDeadline(time.Now().Add(defaultDeadLine))
 	if err != nil {
 		log.Fatal("failed to dial leader:", err)
@@ -55,9 +51,7 @@ func New(ctx context.Context, topic,
 	}, nil
 }
 
-func (ds *DataSteam) Wait(waitTime time.Duration, errChan chan error) {
-	maxTime := make(chan time.Time, 1)
-
+func (ds *DataSteam) Wait(ctx context.Context, errChan chan error) {
 	go func() {
 		for {
 			select {
@@ -69,16 +63,14 @@ func (ds *DataSteam) Wait(waitTime time.Duration, errChan chan error) {
 				}
 			case <-time.After(1 * time.Millisecond):
 				continue
-			case v := <-maxTime:
-				log.Printf("Conn stop on %s", v.Format(time.RFC1123))
+			case <-ctx.Done():
+				log.Printf("Conn stop by context stop")
 				ds.client.Close()
 				return
 			}
 		}
 	}()
-
-	v := <-time.After(waitTime)
-	maxTime <- v
+	<-ctx.Done()
 }
 
 func (ds *DataSteam) Send(msg []byte) {

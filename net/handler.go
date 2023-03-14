@@ -25,8 +25,8 @@ func New(service messageService) *handler {
 func (h *handler) PushMessage(c *gin.Context) {
 	c.ContentType()
 
-	topic := c.Params.ByName("topic")
-	entityId := c.Params.ByName("entity_id")
+	topic := c.Query("topic")
+	entityId := c.Query("entity_id")
 
 	err := h.service.SendTo(c, c.Request.Body, topic, entityId)
 	if err != nil {

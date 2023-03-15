@@ -14,7 +14,7 @@ import (
 var create = kafkaWrapper.New
 
 type kafkaController struct {
-	conns *sync.Map
+	conns sync.Map
 
 	errChan chan error
 	path    string
@@ -22,7 +22,7 @@ type kafkaController struct {
 
 func New(path string) *kafkaController {
 	k := &kafkaController{
-		conns: &sync.Map{},
+		conns: sync.Map{},
 		path:  path,
 	}
 
@@ -34,7 +34,7 @@ func New(path string) *kafkaController {
 const defaultClientTimeout = 30 * time.Second
 
 func (ka *kafkaController) start() {
-	log.Println("kafka2 start")
+	log.Println("kafka controller start")
 
 	ka.errChan = make(chan error)
 
@@ -42,26 +42,57 @@ func (ka *kafkaController) start() {
 		if err, done := <-ka.errChan; !done {
 			ka.handleError(err)
 		} else {
-			log.Println("kafka2 error minor stopped")
+			log.Println("kafka conntroller error minor stopped")
 		}
 	}()
 }
 
-func (ka *kafkaController) GetOrCreate(topic string) chan []byte {
-	v, _ := ka.conns.LoadOrStore(topic, ka.create(topic))
+func (ka *kafkaController) getOrCreate(topic string) chan []byte {
+	if v, ok := ka.conns.Load(topic); ok {
+		return v.(chan []byte)
+	}
 
-	return v.(chan []byte)
+	return ka.create(topic)
 }
 
 func (ka *kafkaController) create(topic string) chan []byte {
 	conn := make(chan []byte)
+	ka.conns.Store(topic, conn)
+
 	connKafka := make(chan *kafka.Message)
 
-	go func() {
-		count := 0
+	var wg sync.WaitGroup
+	wg.Add(1)
+	context.Background()
 
+	ctx, cancel := context.WithTimeout(context.Background(), defaultClientTimeout)
+	client, err := create(ctx, topic, ka.path, connKafka, ka.errChan)
+	if err != nil {
+		log.Print(err.Error())
+		cancel()
+
+		return conn
+	}
+
+	go func() {
+		defer close(connKafka)
+		defer cancel()
+
+		log.Printf("client start waiting message")
+		client.Wait(ctx, ka.errChan)
+		<-ctx.Done()
+		ka.conns.Delete(topic)
+		close(conn)
+		wg.Wait()
+	}()
+
+	go func() {
+		defer wg.Done()
+		log.Println("start receive message")
+
+		count := 0
 		for {
-			if msg, done := <-conn; !done {
+			if msg, ok := <-conn; ok {
 				count++
 				connKafka <- &kafka.Message{
 					Key:   []byte(strconv.Itoa(count)),
@@ -73,32 +104,13 @@ func (ka *kafkaController) create(topic string) chan []byte {
 		}
 	}()
 
-	defer func() {
-		defer close(connKafka)
-		defer close(conn)
-
-		ctx, cancel := context.WithTimeout(context.Background(), defaultClientTimeout)
-		defer cancel()
-
-		client, err := create(ctx, topic, ka.path, connKafka)
-		if err != nil {
-			log.Print(err.Error())
-			cancel()
-
-			return
-		}
-
-		client.Wait(ctx, ka.errChan)
-		ka.conns.Delete(topic)
-	}()
-
 	return conn
 }
 
 // for graceful shutdown
 func (ka *kafkaController) Close() {
 	c := ka.conns
-	ka.conns = nil
+	ka.conns = sync.Map{}
 	c.Range(func(k, v any) bool {
 		log.Printf("Closing connection to %s", k)
 		close(v.(chan []byte))
@@ -111,4 +123,11 @@ func (ka *kafkaController) Close() {
 
 func (ka *kafkaController) handleError(err error) {
 	log.Print(err.Error())
+}
+
+func (ka *kafkaController) Send(topic string, message []byte) {
+	ch := ka.getOrCreate(topic)
+	go func() {
+		ch <- message
+	}()
 }

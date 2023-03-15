@@ -6,7 +6,7 @@ import (
 )
 
 type messageHandler interface {
-	GetOrCreate(topic string) chan []byte
+	Send(topic string, data []byte)
 }
 
 type service struct {
@@ -24,7 +24,7 @@ func (s *service) SendTo(ctx context.Context, body io.Reader, topic string, id s
 	if err != nil {
 		return err
 	}
+	s.handlers.Send(topic, data)
 
-	s.handlers.GetOrCreate(topic) <- data
 	return nil
 }

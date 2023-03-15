@@ -3,6 +3,8 @@ package kafka2
 import (
 	"context"
 	"log"
+	"strconv"
+	"sync"
 	"time"
 
 	kafkaWrapper "github.com/sean0427/outbox-function-distributed-system-p/kafkawrapper"
@@ -12,14 +14,15 @@ import (
 var create = kafkaWrapper.New
 
 type kafkaController struct {
-	conns   map[string]chan []byte
+	conns *sync.Map
+
 	errChan chan error
 	path    string
 }
 
 func New(path string) *kafkaController {
 	k := &kafkaController{
-		conns: make(map[string]chan []byte),
+		conns: &sync.Map{},
 		path:  path,
 	}
 
@@ -45,11 +48,9 @@ func (ka *kafkaController) start() {
 }
 
 func (ka *kafkaController) GetOrCreate(topic string) chan []byte {
-	if v, found := ka.conns[topic]; found {
-		return v
-	}
+	v, _ := ka.conns.LoadOrStore(topic, ka.create(topic))
 
-	return ka.create(topic)
+	return v.(chan []byte)
 }
 
 func (ka *kafkaController) create(topic string) chan []byte {
@@ -57,9 +58,13 @@ func (ka *kafkaController) create(topic string) chan []byte {
 	connKafka := make(chan *kafka.Message)
 
 	go func() {
+		count := 0
+
 		for {
 			if msg, done := <-conn; !done {
+				count++
 				connKafka <- &kafka.Message{
+					Key:   []byte(strconv.Itoa(count)),
 					Value: msg,
 				}
 			} else {
@@ -84,20 +89,22 @@ func (ka *kafkaController) create(topic string) chan []byte {
 		}
 
 		client.Wait(ctx, ka.errChan)
-		delete(ka.conns, topic)
+		ka.conns.Delete(topic)
 	}()
 
-	ka.conns[topic] = conn
 	return conn
 }
 
+// for graceful shutdown
 func (ka *kafkaController) Close() {
-	for k, v := range ka.conns {
-		log.Printf("Closing connection to %s", k)
-		close(v)
-	}
-
+	c := ka.conns
 	ka.conns = nil
+	c.Range(func(k, v any) bool {
+		log.Printf("Closing connection to %s", k)
+		close(v.(chan []byte))
+		return true
+	})
+
 	close(ka.errChan)
 	ka.errChan = nil
 }

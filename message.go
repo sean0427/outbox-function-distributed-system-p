@@ -24,6 +24,7 @@ func (s *service) SendTo(ctx context.Context, body io.Reader, topic string, id s
 	if err != nil {
 		return err
 	}
+
 	s.handlers.GetOrCreate(topic) <- data
 	return nil
 }
